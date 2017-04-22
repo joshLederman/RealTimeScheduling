@@ -11,6 +11,14 @@ struct process_state {
 			struct process_state *nextProcess;
 }; 
 
+//queue sorted by start time. No element of the
+//queue should be ready to execute (those should
+//go in deadline_queue
+struct process_state * start_time_queue = NULL;
+//queue sorted by deadline. All elements of the
+//queue must be ready to execute.
+struct process_state * deadline_queue = NULL;
+
 struct process_state * current_process = NULL;
 //The queue will be created with process_create in begin_queue
 //then switched to current_process during the first call to process_select
