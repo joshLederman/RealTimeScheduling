@@ -3,6 +3,7 @@
 #include <fsl_device_registers.h>
 #include "realtime.h"
 
+#define T1ms 0x1D4C0 //One millisecond (based on 120 MHz clock - same as processor)
 
 struct process_state {
 			unsigned int *sp;
@@ -46,24 +47,35 @@ struct process_state* remove() {
 }
 
 int process_create (void (*f)(void), int n) {
-			unsigned int *sp = process_stack_init(*f, n);
-			if (sp == NULL) return -1;
-			struct process_state *processState = malloc(sizeof(*processState));
-			processState->sp = sp;
-			processState->sp_original = sp;
-			processState->size=n;
-			append(processState);
-			return 0;
+	unsigned int *sp = process_stack_init(*f, n);
+	if (sp == NULL) return -1;
+	struct process_state *processState = malloc(sizeof(*processState));
+	processState->sp = sp;
+	processState->sp_original = sp;
+	processState->size=n;
+	append(processState);
+	return 0;
 };
+
+int process_rt_create(void (*f)(void), int n, realtime_t *start, realtime_t *deadline) {
+	
+}
 
 void process_start (void) {
 	
-	NVIC_EnableIRQ(PIT0_IRQn); //Enables interrupts
+	NVIC_EnableIRQ(PIT0_IRQn); //Enables interrupts timer 0
+	NVIC_EnableIRQ(PIT1_IRQn); //Enables interrupts timer 1
+	
+	//Establishes appriority priority order
+	NVIC_SetPriority(SVCall_IRQn,1);
+	NVIC_SetPriority(PIT0_IRQn,2);
+	NVIC_SetPriority(PIT1_IRQn,0);
 	
 	SIM->SCGC6 = SIM_SCGC6_PIT_MASK;
 	PIT_MCR = 1; //Enables standard timers
 	PIT->CHANNEL[0].LDVAL = 3000000;
-	
+	PIT->CHANNEL[1].LDVAL = T1ms;
+		
 	process_begin();
 }
 	
@@ -101,5 +113,17 @@ unsigned int * process_select (unsigned int *cursp) {
 		append(switched_process);
 		//Returns the new process sp
 		return current_process->sp;
+	}
+}
+
+void PIT1_IRQHandler(void) {
+	PIT->CHANNEL[1].LDVAL = T1ms; //Resets timer with 1 ms
+	PIT_TFLG0 = 1; //Clears the timeout flag
+	
+	if (current_time.msec < 1000)
+		current_time.msec++;
+	else {
+		current_time.msec = 0;
+		current_time.sec++;
 	}
 }
