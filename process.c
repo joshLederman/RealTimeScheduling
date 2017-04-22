@@ -9,6 +9,8 @@ struct process_state {
 			unsigned int *sp;
 			unsigned int *sp_original; //Original stack pointer
 			unsigned int size; //Size of stack as initialized
+			realtime_t *start; //Absolute Start time
+			realtime_t *deadline; //Absolute Deadline time
 			struct process_state *nextProcess;
 }; 
 
@@ -19,6 +21,7 @@ struct process_state * start_time_queue = NULL;
 //queue sorted by deadline. All elements of the
 //queue must be ready to execute.
 struct process_state * deadline_queue = NULL;
+struct process_state * current_realtime_process = NULL;
 
 struct process_state * current_process = NULL;
 //The queue will be created with process_create in begin_queue
@@ -61,12 +64,25 @@ int process_create (void (*f)(void), int n) {
 	processState->sp = sp;
 	processState->sp_original = sp;
 	processState->size=n;
+	processState->start=NULL; //-1 Indicates a static (not realtime) process
+	processState->deadline=NULL;
 	append(processState);
 	return 0;
 };
 
 int process_rt_create(void (*f)(void), int n, realtime_t *start, realtime_t *deadline) {
-	
+	unsigned int *sp = process_stack_init(*f, n);
+	if (sp == NULL) return -1;
+	struct process_state *processState = malloc(sizeof(*processState));
+	processState->sp = sp;
+	processState->sp_original = sp;
+	processState->size=n;
+	realtime_t start_time = {current_time.sec+start->sec,current_time.msec+start->msec};
+	realtime_t deadline_time = {start_time.sec+deadline->sec,start_time.msec+deadline->msec};
+	processState->start=&start_time;
+	processState->deadline=&deadline_time;
+	appendRealTime(processState); //TO DO - adds to appropriate queue
+	return 0;
 }
 
 void process_start (void) {
@@ -88,6 +104,14 @@ void process_start (void) {
 }
 	
 unsigned int * process_select (unsigned int *cursp) {
+	//TO DO - Update real time queues, moving ready processes into the ready queue (in order)
+	
+	//Update process sp
+	//If a process terminates, handle that appropriately
+	//Switch to the process at the beginning of the deadline queue (can be the same)
+	
+	//If there are no process in the deadline queue, run the appropriate static process
+	
 	if (cursp==NULL) {
 		if (first_time) {
 			//This is the first call to process_select
