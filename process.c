@@ -49,7 +49,7 @@ void append(struct process_state * lastElement, struct process_state * queue){
 				queue = lastElement;
 			} else {
 				tmp = queue;
-				while (tmp->queue != NULL) {
+				while (tmp->nextProcess != NULL) {
 					// while there are more elements in the list
 					tmp = tmp->nextProcess;
 				}
@@ -80,7 +80,7 @@ struct process_state* remove(struct process_state * queue) {
 *malloc issues and the processState otherwise. Does not
 *set the 'start' or 'deadline' attributes to any value.
 */
-struct process_state* process_init(int n) {
+struct process_state* process_init(void (*f)(void), int n) {
 	unsigned int *sp = process_stack_init(*f, n);
 	if (sp == NULL) return NULL;
 	struct process_state *processState = malloc(sizeof(*processState));
@@ -92,7 +92,7 @@ struct process_state* process_init(int n) {
 }
 
 int process_create (void (*f)(void), int n) {
-	struct process_state* processState = process_init(n);
+	struct process_state* processState = process_init(f, n);
 	if (processState == NULL) return -1;
 	else {
 		processState->start=NULL; //NULL Indicates a static (not realtime) process
@@ -103,7 +103,7 @@ int process_create (void (*f)(void), int n) {
 };
 
 int process_rt_create(void (*f)(void), int n, realtime_t *start, realtime_t *deadline) {
-	struct process_state* processState = process_init(n);
+	struct process_state* processState = process_init(f, n);
 	if (processState == NULL) return -1;
 	else {
 		realtime_t start_time = {current_time.sec+start->sec,current_time.msec+start->msec};
@@ -261,9 +261,8 @@ unsigned int * process_select (unsigned int *cursp) {
 		if (current_realtime_process == NULL) {
 			pop_and_push();
 		}
-		
-		struct process_state * processState = getNextProcess();
-		return process_state->sp;
+		struct process_state* processState = get_next_process();
+		return processState->sp;
 	}
 }
 
