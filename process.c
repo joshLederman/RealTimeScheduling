@@ -261,9 +261,9 @@ unsigned int * process_select (unsigned int *cursp) {
 		if (current_realtime_process == NULL) {
 			pop_and_push();
 		}
-		struct process_state* processState = get_next_process();
-		return processState->sp;
 	}
+	struct process_state* processState = get_next_process();
+	return processState->sp;
 }
 
 void PIT1_IRQHandler(void) {
