@@ -1,0 +1,12 @@
+*.o
+*.d
+*.crf
+RTE/*
+*.lst
+*.dep
+*.map
+*.htm
+*.lnp
+*.uvprojx
+*.uvoptx
+*.uvguix.*
