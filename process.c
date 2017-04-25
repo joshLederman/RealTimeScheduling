@@ -26,7 +26,7 @@ struct process_state * deadline_queue = NULL;
 //queue of non real-time processes for round robin execution
 //A value of NULL means there are no non-real time processes
 //to be executed.
-struct process_state * round_robbin_queue = NULL;
+struct process_state * round_robin_queue = NULL;
 //points to the process in deadline_queue that is currently
 //executing. A value of NULL means that deadline_queue is empty
 //and there are no processes ready to be executed.
@@ -37,18 +37,22 @@ struct process_state * current_realtime_process = NULL;
 //then switched to current_process during the first call to process_select
 unsigned int first_time=1;
 
+int process_deadline_met=0;
+int process_deadline_miss=0;
+realtime_t current_time={0,0};
+
 /*
 *[append process queue] appends [process] to [queue] handling the case
 *where [queue] is NULL. [process] may not be NULL.
 *
 */
-void append(struct process_state * lastElement, struct process_state * queue){
+
+void append(struct process_state * lastElement){
 			struct process_state *tmp;
-			//current_process - list of process_state
-			if (queue == NULL) {
-				queue = lastElement;
+			if (round_robin_queue == NULL) {
+				round_robin_queue = lastElement; //You are assigning to a pointer rather than the value
 			} else {
-				tmp = queue;
+				tmp = round_robin_queue;
 				while (tmp->nextProcess != NULL) {
 					// while there are more elements in the list
 					tmp = tmp->nextProcess;
@@ -59,6 +63,80 @@ void append(struct process_state * lastElement, struct process_state * queue){
 			lastElement->nextProcess = NULL;
 }
 
+//Returns 0 if compareTo earlier than now, 1 if same, 2 if later
+int compareTimes(realtime_t * now, realtime_t * compareTo) {
+	if (now->sec < compareTo->sec)
+		return 2;
+	if (now->sec > compareTo->sec)
+		return 0;
+	if (now->msec < compareTo->msec)
+		return 2;
+	if (now->msec > compareTo->sec)
+		return 0;
+	return 1;
+}
+
+void addDeadlineQueue(struct process_state * process) {
+	//If earlier than the earliest process, put at the beginning
+	if (compareTimes(start_time_queue->deadline,process->deadline)<2) {
+		process->nextProcess=deadline_queue;
+		deadline_queue=process;
+	}
+	else {
+		struct process_state *temp, *earlier;
+		earlier=deadline_queue;
+		temp=earlier->nextProcess;
+		while (1) {
+			//Puts process before temp if deadline time is the same or earlier
+			if (compareTimes(temp->deadline,process->deadline)<2) { //Is earlier than the temp process
+				process->nextProcess=temp;
+				earlier->nextProcess=process;
+				break;
+			}
+			if (temp->nextProcess==NULL) { //Has latest deadline time - put at end
+				temp->nextProcess = process;
+				break;
+			}
+			//Moves to next process in list
+			earlier=temp;
+			temp=earlier->nextProcess;
+		}
+	}
+}
+
+void addRealTime(struct process_state * process) {
+	//Not yet ready
+	if (compareTimes(&current_time, process->start)==0) {
+		//If earlier than the earliest process, put at the beginning
+		if (compareTimes(start_time_queue->start,process->start)<2) {
+			process->nextProcess=start_time_queue;
+			start_time_queue=process;
+		}
+		else {
+			struct process_state *temp, *earlier;
+			earlier=start_time_queue;
+			temp=earlier->nextProcess;
+			while (1) {
+				//Puts process before temp if start time is the same or earlier
+				if (compareTimes(temp->start,process->start)<2) { //Is earlier than the temp process
+					process->nextProcess=temp;
+					earlier->nextProcess=process;
+					break;
+				}
+				if (temp->nextProcess==NULL) { //Has latest start time - put at end
+					temp->nextProcess = process;
+					break;
+				}
+				//Moves to next process in list
+				earlier=temp;
+				temp=earlier->nextProcess;
+			}
+		}
+	}
+	//Already past start time - need to put in deadline queue
+	addDeadlineQueue(process);
+}
+	
 /*
 *[remove queue] removes the first element from [queue]
 */
@@ -97,7 +175,7 @@ int process_create (void (*f)(void), int n) {
 	else {
 		processState->start=NULL; //NULL Indicates a static (not realtime) process
 		processState->deadline=NULL;
-		append(processState, round_robbin_queue);
+		append(processState);
 		return 0;
 	}
 };
@@ -129,7 +207,7 @@ void process_start (void) {
 	PIT_MCR = 1; //Enables standard timers
 	PIT->CHANNEL[0].LDVAL = 3000000;
 	PIT->CHANNEL[1].LDVAL = T1ms;
-		
+	
 	process_begin();
 }
 
@@ -138,8 +216,21 @@ void process_start (void) {
 * from the start_time_queue to the deadline_queue.
 */
 void move_processes(void) {
-	//TO DO - implement moving processes from one start_queue to
-	//deadline_queue
+	struct process_state *temp, *earlier;
+	earlier=deadline_queue;
+	temp=earlier->nextProcess;
+	while (1) {
+		//Iterates through processes, removes if current_time start is after current_time
+		if (compareTimes(&current_time,temp->start)>0) { //If the start time is after the current time
+				earlier->nextProcess=temp->nextProcess;
+				addDeadlineQueue(temp);
+		}
+		if (temp->nextProcess==NULL)
+			break;
+		//Moves to next process in list
+		earlier=temp;
+		temp=earlier->nextProcess;
+	}
 }
 
 /*
@@ -147,11 +238,10 @@ void move_processes(void) {
 * running and sets it's sp to [cursp]
 */
 void update_sp(unsigned int *cursp) {
-	if (current_realtime_process != NULL) {
+	if (current_realtime_process != NULL)
 		current_realtime_process->sp = cursp;
-	} else {
-		round_robbin_queue->sp = cursp;
-	}
+	else if (round_robin_queue != NULL)
+		round_robin_queue->sp = cursp;
 }
 
 /*
@@ -170,7 +260,7 @@ void free_process(struct process_state * terminated_process) {
 * [round_robin_queue] and frees it.
 */
 void remove_static(void) {
-	struct process_state * terminated = remove(round_robbin_queue);
+	struct process_state * terminated = remove(round_robin_queue);
 	free_process(terminated);
 }
 
@@ -179,6 +269,12 @@ void remove_static(void) {
 * from the [deadline_queue] and frees it.
 */
 void remove_realtime(void) {
+	//Updates deadline count
+	if (compareTimes(&current_time,current_realtime_process->deadline) == 0) //Missed deadline
+		process_deadline_miss++;
+	else
+		process_deadline_met++;
+	
 	if (current_realtime_process == deadline_queue) {
 		deadline_queue = NULL;
 	} else {
@@ -199,8 +295,8 @@ void remove_realtime(void) {
 * process to the end of the queue.
 */
 void pop_and_push(void) {
-	struct process_state * switched_process = remove(round_robbin_queue);
-	append(switched_process,round_robbin_queue);
+	struct process_state * switched_process = remove(round_robin_queue);
+	append(switched_process);
 }
 
 /*
@@ -214,15 +310,17 @@ void pop_and_push(void) {
 struct process_state* get_next_process(void) {
 	if (deadline_queue == NULL) {
 		current_realtime_process = NULL;
-		if (round_robbin_queue == NULL) {
+		if (round_robin_queue == NULL) {
 			if (start_time_queue == NULL) {
 				return NULL;
 			} else {
+				__enable_irq();
 				while (deadline_queue == NULL);
+				__disable_irq();
 				return get_next_process();
 			}
 		} else {
-			return round_robbin_queue;
+			return round_robin_queue;
 		}
 	} else {
 		current_realtime_process = deadline_queue;
@@ -233,7 +331,8 @@ struct process_state* get_next_process(void) {
 unsigned int * process_select (unsigned int *cursp) {
 	//TO DO - Update real time queues, moving ready processes into the ready queue (in order)
 	//Update process sp
-	update_sp(cursp);
+	if (!first_time)
+		update_sp(cursp);
 
 	//If a process terminates, handle that appropriately
 	//Switch to the process at the beginning of the deadline queue (can be the same)
