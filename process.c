@@ -78,7 +78,9 @@ int compareTimes(realtime_t * now, realtime_t * compareTo) {
 
 void addDeadlineQueue(struct process_state * process) {
 	//If earlier than the earliest process, put at the beginning
-	if (compareTimes(start_time_queue->deadline,process->deadline)<2) {
+	if (deadline_queue == NULL)
+			deadline_queue = process;
+	else if (compareTimes(deadline_queue->deadline,process->deadline)<2) {
 		process->nextProcess=deadline_queue;
 		deadline_queue=process;
 	}
@@ -107,8 +109,11 @@ void addDeadlineQueue(struct process_state * process) {
 void addRealTime(struct process_state * process) {
 	//Not yet ready
 	if (compareTimes(&current_time, process->start)==0) {
+		//If no elements, put at top:
+		if (start_time_queue == NULL)
+			start_time_queue = process;
 		//If earlier than the earliest process, put at the beginning
-		if (compareTimes(start_time_queue->start,process->start)<2) {
+		else if (compareTimes(start_time_queue->start,process->start)<2) {
 			process->nextProcess=start_time_queue;
 			start_time_queue=process;
 		}
