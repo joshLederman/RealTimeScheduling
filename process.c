@@ -216,20 +216,26 @@ void process_start (void) {
 * from the start_time_queue to the deadline_queue.
 */
 void move_processes(void) {
-	struct process_state *temp, *earlier;
-	earlier=deadline_queue;
-	temp=earlier->nextProcess;
-	while (1) {
+	struct process_state *temp, *earlier, *next;
+	earlier=NULL;
+	temp=start_time_queue;
+	while (temp != NULL) {
 		//Iterates through processes, removes if current_time start is after current_time
 		if (compareTimes(&current_time,temp->start)>0) { //If the start time is after the current time
-				earlier->nextProcess=temp->nextProcess;
-				addDeadlineQueue(temp);
+			next = temp->nextProcess;
+			temp->nextProcess = NULL;
+			addDeadlineQueue(temp);
+			temp = next;
+			if (earlier == NULL) {
+				start_time_queue = next;
+			} else {
+				earlier->nextProcess=next;
+			}			
+		} else {
+			//Moves to next process in list
+			earlier=temp;
+			temp=earlier->nextProcess;
 		}
-		if (temp->nextProcess==NULL)
-			break;
-		//Moves to next process in list
-		earlier=temp;
-		temp=earlier->nextProcess;
 	}
 }
 
