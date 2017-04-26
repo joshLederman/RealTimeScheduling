@@ -5,7 +5,7 @@
 #include "utils.h"
 
 
-#define T1ms 21370 //One millisecond (based on 120 MHz clock - same as processor)
+#define T1ms 21370 //One millisecond as confirmed by experimentation
 
 struct process_state {
 			unsigned int *sp;
