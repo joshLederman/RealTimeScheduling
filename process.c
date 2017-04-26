@@ -2,8 +2,10 @@
 #include <stdlib.h>
 #include <fsl_device_registers.h>
 #include "realtime.h"
+#include "utils.h"
 
-#define T1ms 0x1D4C0 //One millisecond (based on 120 MHz clock - same as processor)
+
+#define T1ms 21370 //One millisecond (based on 120 MHz clock - same as processor)
 
 struct process_state {
 			unsigned int *sp;
@@ -77,9 +79,11 @@ int compareTimes(realtime_t * now, realtime_t * compareTo) {
 }
 
 void addDeadlineQueue(struct process_state * process) {
-	//If earlier than the earliest process, put at the beginning
+	process->nextProcess = NULL;
+	//If no processes, the deadline queue becomes the process
 	if (deadline_queue == NULL)
 			deadline_queue = process;
+	//If earlier than the earliest process, put at the beginning
 	else if (compareTimes(deadline_queue->deadline,process->deadline)<2) {
 		process->nextProcess=deadline_queue;
 		deadline_queue=process;
@@ -88,58 +92,46 @@ void addDeadlineQueue(struct process_state * process) {
 		struct process_state *temp, *earlier;
 		earlier=deadline_queue;
 		temp=earlier->nextProcess;
-		while (1) {
-			//Puts process before temp if deadline time is the same or earlier
-			if (compareTimes(temp->deadline,process->deadline)<2) { //Is earlier than the temp process
-				process->nextProcess=temp;
-				earlier->nextProcess=process;
-				break;
-			}
-			if (temp->nextProcess==NULL) { //Has latest deadline time - put at end
-				temp->nextProcess = process;
-				break;
-			}
-			//Moves to next process in list
-			earlier=temp;
-			temp=earlier->nextProcess;
+		while (temp != NULL && compareTimes(temp->deadline,process->deadline) >= 1) {
+			earlier = temp;
+			temp = temp->nextProcess;
 		}
+		earlier->nextProcess = process;
+		process->nextProcess = temp;
+	}
+}
+
+void addStartQueue(struct process_state * process) {
+	if (start_time_queue == NULL) {
+		start_time_queue = process;
+	}
+	//If earlier than the earliest process, put at the beginning
+	else if (compareTimes(start_time_queue->start,process->start)<2) {
+		process->nextProcess=start_time_queue;
+		start_time_queue=process;
+	} 
+	else {
+		struct process_state *temp, *earlier;
+		earlier=start_time_queue;
+		temp=earlier->nextProcess;
+		while (temp != NULL && compareTimes(temp->start, process->start) >= 1) {
+			earlier = temp;
+			temp = temp->nextProcess;
+		}
+		earlier->nextProcess = process;
+		process->nextProcess = temp;
 	}
 }
 
 void addRealTime(struct process_state * process) {
 	//Not yet ready
-	if (compareTimes(&current_time, process->start)==0) {
-		//If no elements, put at top:
-		if (start_time_queue == NULL)
-			start_time_queue = process;
-		//If earlier than the earliest process, put at the beginning
-		else if (compareTimes(start_time_queue->start,process->start)<2) {
-			process->nextProcess=start_time_queue;
-			start_time_queue=process;
-		}
-		else {
-			struct process_state *temp, *earlier;
-			earlier=start_time_queue;
-			temp=earlier->nextProcess;
-			while (1) {
-				//Puts process before temp if start time is the same or earlier
-				if (compareTimes(temp->start,process->start)<2) { //Is earlier than the temp process
-					process->nextProcess=temp;
-					earlier->nextProcess=process;
-					break;
-				}
-				if (temp->nextProcess==NULL) { //Has latest start time - put at end
-					temp->nextProcess = process;
-					break;
-				}
-				//Moves to next process in list
-				earlier=temp;
-				temp=earlier->nextProcess;
-			}
-		}
+	process->nextProcess = NULL;
+	if (compareTimes(&current_time, process->start) == 2) {
+		addStartQueue(process);
+	} else {
+		addDeadlineQueue(process);
 	}
 	//Already past start time - need to put in deadline queue
-	addDeadlineQueue(process);
 }
 	
 /*
@@ -185,20 +177,37 @@ int process_create (void (*f)(void), int n) {
 	}
 };
 
-int process_rt_create(void (*f)(void), int n, realtime_t *start, realtime_t *deadline) {
-	struct process_state* processState = process_init(f, n);
-	if (processState == NULL) return -1;
-	else {
-		realtime_t start_time = {current_time.sec+start->sec,current_time.msec+start->msec};
-		realtime_t deadline_time = {start_time.sec+deadline->sec,start_time.msec+deadline->msec};
-		processState->start=&start_time;
-		processState->deadline=&deadline_time;
-		addRealTime(processState); //TO DO - adds to appropriate queue
-		return 0;
+realtime_t* addTimes(realtime_t *one, realtime_t * two) {
+	realtime_t* result = malloc(sizeof(realtime_t));
+	if (result == NULL) {
+		return NULL;
+	} else {
+		result->sec = one->sec + two->sec + ((one->msec + two->msec) / 1000);
+		result->msec = (one->msec + two->msec) % 1000;
+		return result;
 	}
 }
 
+int process_rt_create(void (*f)(void), int n, realtime_t *start, realtime_t *deadline) {
+	struct process_state* processState = process_init(f, n);
+	if (processState == NULL) return -1;
+	realtime_t* start_time = addTimes(&current_time, start);
+	realtime_t* deadline_time = addTimes(start_time, deadline);
+	if (start_time == NULL || deadline_time == NULL) return -1;
+	processState->start=start_time;
+	processState->deadline=deadline_time;
+	addRealTime(processState);
+	return 0;
+}
+
 void process_start (void) {
+	
+	SIM->SCGC6 = SIM_SCGC6_PIT_MASK;
+	PIT_MCR = 0; //Enables standard timers
+	PIT->CHANNEL[0].LDVAL = 3000000;
+	PIT->CHANNEL[1].LDVAL = T1ms;
+	PIT->CHANNEL[1].TCTRL = 3;
+	
 	
 	NVIC_EnableIRQ(PIT0_IRQn); //Enables interrupts timer 0
 	NVIC_EnableIRQ(PIT1_IRQn); //Enables interrupts timer 1
@@ -208,10 +217,7 @@ void process_start (void) {
 	NVIC_SetPriority(PIT0_IRQn,2);
 	NVIC_SetPriority(PIT1_IRQn,0);
 	
-	SIM->SCGC6 = SIM_SCGC6_PIT_MASK;
-	PIT_MCR = 1; //Enables standard timers
-	PIT->CHANNEL[0].LDVAL = 3000000;
-	PIT->CHANNEL[1].LDVAL = T1ms;
+
 	
 	process_begin();
 }
@@ -226,7 +232,7 @@ void move_processes(void) {
 	temp=start_time_queue;
 	while (temp != NULL) {
 		//Iterates through processes, removes if current_time start is after current_time
-		if (compareTimes(&current_time,temp->start)>0) { //If the start time is after the current time
+		if (compareTimes(&current_time,temp->start)<=1) { //If the start time is after the current time
 			next = temp->nextProcess;
 			temp->nextProcess = NULL;
 			addDeadlineQueue(temp);
@@ -237,6 +243,7 @@ void move_processes(void) {
 				earlier->nextProcess=next;
 			}			
 		} else {
+
 			//Moves to next process in list
 			earlier=temp;
 			temp=earlier->nextProcess;
@@ -263,6 +270,8 @@ void free_process(struct process_state * terminated_process) {
 	//Free the stack of the process
 	process_stack_free(terminated_process->sp_original, terminated_process->size);
 	//Free the struct holding the process
+	if (terminated_process->start != NULL) free(terminated_process->start);
+	if (terminated_process->deadline != NULL) free(terminated_process->deadline);
 	free(terminated_process);
 }
 
@@ -326,7 +335,9 @@ struct process_state* get_next_process(void) {
 				return NULL;
 			} else {
 				__enable_irq();
-				while (deadline_queue == NULL);
+				while (deadline_queue == NULL) {
+						move_processes();
+				}
 				__disable_irq();
 				return get_next_process();
 			}
@@ -342,6 +353,7 @@ struct process_state* get_next_process(void) {
 unsigned int * process_select (unsigned int *cursp) {
 	//TO DO - Update real time queues, moving ready processes into the ready queue (in order)
 	//Update process sp
+	move_processes();
 	if (!first_time)
 		update_sp(cursp);
 
@@ -377,15 +389,11 @@ unsigned int * process_select (unsigned int *cursp) {
 }
 
 void PIT1_IRQHandler(void) {
-	PIT->CHANNEL[1].LDVAL = T1ms; //Resets timer with 1 ms
-	PIT_TFLG0 = 1; //Clears the timeout flag
-	
+	PIT_TFLG1 = 1; //Clears the timeout flag
 	if (current_time.msec < 1000)
 		current_time.msec++;
 	else {
 		current_time.msec = 0;
 		current_time.sec++;
 	}
-	
-	move_processes();
 }
